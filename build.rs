@@ -17,53 +17,110 @@ macro_rules! check_env_flag {
     };
 }
 
-//This will likely always trigger because it just affects "pre-"compile time and not runtime
+macro_rules! get_env_flag {
+    ($var:ident, $env_name:literal) => {
+        println!("cargo::rerun-if-env-changed={}", $env_name);
+        let $var = match std::env::var($env_name) {
+            Ok(val) => Some(val),
+            Err(_) => None,
+        };
+    };
+    ($var:ident, $env_name:literal, $default:expr) => {
+        println!("cargo::rerun-if-env-changed={}", $env_name);
+        let $var = match std::env::var($env_name) {
+            Ok(val) => val,
+            Err(_) => $default,
+        };
+    };
+}
+
 fn main() -> Result<(), std::io::Error> {
-    //Here we get a bunch of the env flags we need for evaluating what features are enabled
-    let inline_fortune_flag = check_env_flag!("CARGO_FEATURE_INLINE_FORTUNE");
-    println!("cargo::rerun-if-env-changed=CARGO_FEATURE_INLINE_FORTUNE");
-    println!("cargo::rerun-if-env-changed=CARGO_FEATURE_INLINE_OFF_FORTUNE");
-    let inline_cowsay_flag = check_env_flag!("CARGO_FEATURE_INLINE_COWSAY");
-    println!("cargo::rerun-if-env-changed=CARGO_FEATURE_INLINE_COWSAY");
+    //Fortune Functionality
+    get_env_flag!(inline_fortune_flag, "CARGO_FEATURE_INLINE_FORTUNE");
+    get_env_flag!(inline_off_fortune_flag, "CARGO_FEATURE_INLINE_FORTUNE");
+    get_env_flag!(
+        fortune_resource_zip_url,
+        "FORTUNE_RESOURCE_ZIP_URL",
+        String::from("https://github.com/shlomif/fortune-mod/archive/refs/heads/master.zip")
+    );
+    get_env_flag!(
+        fortune_resource_path,
+        "FORTUNE_RESOURCE_PATH",
+        String::from("fortune-mod-master/fortune-mod/datfiles")
+    );
+    get_env_flag!(excluded_fortunes, "EXCLUDED_FORTUNES", String::from(""));
+    get_env_flag!(max_fortune_line_len, "MAX_FORTUNE_LINE_LENGTH");
+    get_env_flag!(max_fortune_lines, "MAX_FORTUNE_LINES");
+
+    //Cowsay Functionality
+    get_env_flag!(inline_cowsay_flag, "CARGO_FEATURE_INLINE_COWSAY");
+    get_env_flag!(cow_path, "COW_PATH");
+    get_env_flag!(
+        cowsay_resource_zip_url,
+        "COWSAY_RESOURCE_ZIP_URL",
+        String::from("https://github.com/cowsay-org/cowsay/archive/refs/heads/main.zip")
+    );
+    get_env_flag!(
+        cowsay_resource_path,
+        "COWSAY_RESOURCE_PATH",
+        String::from("cowsay-main/share/cowsay/cows")
+    );
+    get_env_flag!(
+        excluded_cow_files,
+        "EXCLUDED_COWS",
+        String::from("three-eyes.cow;udder.cow")
+    );
+
+    // let inline_fortune_flag = check_env_flag!("CARGO_FEATURE_INLINE_FORTUNE");
+    // println!("cargo::rerun-if-env-changed=CARGO_FEATURE_INLINE_FORTUNE");
+    // println!("cargo::rerun-if-env-changed=CARGO_FEATURE_INLINE_OFF_FORTUNE");
+    // let inline_cowsay_flag = check_env_flag!("CARGO_FEATURE_INLINE_COWSAY");
+    // println!("cargo::rerun-if-env-changed=CARGO_FEATURE_INLINE_COWSAY");
     let force_download_flag = check_env_flag!("FORCE_DOWNLOAD");
     println!("cargo::rerun-if-env-changed=FORCE_DOWNLOAD");
     let use_default_flag = check_env_flag!("USE_DEFAULT_RESOURCES");
     println!("cargo::rerun-if-env-changed=USE_DEFAULT_RESOURCES");
-    let cow_path_exists = check_env_flag!("COW_PATH");
-    println!("cargo::rerun-if-env-changed=COW_PATH");
+    // let cow_path_exists = check_env_flag!("COW_PATH");
+    // println!("cargo::rerun-if-env-changed=COW_PATH");
     let fortune_file_exists = check_env_flag!("FORTUNE_FILE");
     println!("cargo::rerun-if-env-changed=FORTUNE_FILE");
     let fortune_path_exists = check_env_flag!("FORTUNE_PATH");
     println!("cargo::rerun-if-env-changed=FORTUNE_PATH");
 
-    let config: BuildConfig = get_config()?;
-    println!("{:#?}", &config);
-
     //Download Resources
-    if inline_cowsay_flag {
-        if use_default_flag || !cow_path_exists {
-            get_source_archive(&config.cowsay.url, "cowsay", force_download_flag)?;
+    if inline_cowsay_flag.is_some() {
+        if use_default_flag || cow_path.is_none() {
+            get_source_archive(&cowsay_resource_zip_url, "cowsay", force_download_flag)?;
             extract_resources(
                 "target/downloads/cowsay.zip",
-                &config.cowsay.internal_path,
+                &cowsay_resource_path,
                 "target/resources/cowsay",
-                &config.cowsay.exclude,
+                &Some(excluded_cow_files.split(";").collect::<Vec<&str>>()),
             )?;
         }
         generate_cowsay_source()?;
     }
 
-    if inline_fortune_flag {
+    if inline_fortune_flag.is_some() {
         if use_default_flag || (!fortune_file_exists && !fortune_path_exists) {
-            get_source_archive(&config.fortune_mod.url, "fortune", force_download_flag)?;
+            get_source_archive(&fortune_resource_zip_url, "fortune", force_download_flag)?;
             extract_resources(
                 "target/downloads/fortune.zip",
-                &config.fortune_mod.internal_path,
+                &fortune_resource_path,
                 "target/resources/fortune",
-                &config.fortune_mod.exclude,
+                &Some(excluded_fortunes.split(";").collect::<Vec<&str>>()),
             )?;
         }
-        create_fortune_db(&config.settings)?;
+        create_fortune_db(
+            max_fortune_line_len.map(|x| {
+                u64::from_str_radix(&x, 10)
+                    .expect("Need a non-decimal Base 10 number for maximum fortune line length")
+            }),
+            max_fortune_lines.map(|x| {
+                u64::from_str_radix(&x, 10)
+                    .expect("Need a non-decimal Base 10 number for maximum fortune line count")
+            }),
+        )?;
     }
 
     Ok(())
@@ -86,7 +143,10 @@ macro_rules! check_dir_exists {
     };
 }
 
-fn create_fortune_db(settings: &BuildSettings) -> Result<(), std::io::Error> {
+fn create_fortune_db(
+    max_line_len: Option<u64>,
+    max_lines: Option<u64>,
+) -> Result<(), std::io::Error> {
     /***************************************
      * Function Definitions (Because this is easier to fold)
      ***************************************/
@@ -249,16 +309,16 @@ fn create_fortune_db(settings: &BuildSettings) -> Result<(), std::io::Error> {
     {
         gen_fortune_db(
             String::from("target/resources/fortune"),
-            &settings.max_width,
-            &settings.max_lines,
+            &max_line_len,
+            &max_lines,
         )
     } else {
         if let Ok(val) = std::env::var("FORTUNE_FILE") {
             println!("cargo::rerun-if-changed={val}");
-            gen_fortune_db(val, &settings.max_width, &settings.max_lines)
+            gen_fortune_db(val, &max_line_len, &max_lines)
         } else if let Ok(val) = std::env::var("FORTUNE_PATH") {
             println!("cargo::rerun-if-changed={val}");
-            gen_fortune_db(val, &settings.max_width, &settings.max_lines)
+            gen_fortune_db(val, &max_line_len, &max_lines)
         } else {
             panic!("Unexpected else branch hit toward end of create_fortune_db")
         }
@@ -421,7 +481,7 @@ fn extract_resources(
     archive: &str,
     internal_path: &str,
     destination: &str,
-    exclude: &Option<Vec<String>>,
+    exclude: &Option<Vec<&str>>,
 ) -> Result<(), std::io::Error> {
     match fs::read_dir("target/tmp") {
         Ok(_) => {
@@ -459,7 +519,7 @@ fn extract_resources(
                         .expect("Could not get metadata for some of the resources")
                         .file_name()
                         .clone()
-                        .into_string()
+                        .to_str()
                         .unwrap(),
                 )
             } else {
@@ -475,51 +535,4 @@ fn extract_resources(
         .expect("Could not copy resources as expected!");
 
     Ok(())
-}
-/************************************************/
-/**************Configuration Functions***********/
-/************************************************/
-
-#[derive(serde::Deserialize, Debug)]
-struct ResourceConfig {
-    #[serde(rename = "source-zip-url")]
-    pub url: String,
-    #[serde(rename = "resource-location")]
-    pub internal_path: String,
-    pub exclude: Option<Vec<String>>,
-}
-
-#[derive(serde::Deserialize, Debug)]
-struct BuildSettings {
-    #[serde(rename = "max-fortune-line-len")]
-    pub max_width: Option<u64>,
-    #[serde(rename = "max-fortune-lines")]
-    pub max_lines: Option<u64>,
-}
-
-#[derive(serde::Deserialize, Debug)]
-struct BuildConfig {
-    pub cowsay: ResourceConfig,
-    #[serde(rename = "fortune-mod")]
-    pub fortune_mod: ResourceConfig,
-    pub settings: BuildSettings,
-}
-
-fn get_config() -> Result<BuildConfig, std::io::Error> {
-    use std::io::Read;
-    println!("cargo::rerun-if-changed=./BuildConfig.toml");
-
-    match File::open("./BuildConfig.toml") {
-        Ok(mut file) => {
-            let mut buf = String::new();
-            let _ = file.read_to_string(&mut buf);
-            Ok(
-                toml::from_str(buf.as_str())
-                    .expect("BuildConfig.toml was in an unexpected format!"),
-            )
-        }
-        Err(_) => {
-            panic!("Could not open the BuildConfig.toml in repository root. Did something happen?")
-        }
-    }
 }
